@@ -11,7 +11,13 @@ HTML = """<!doctype html><title>Guard checks</title>
 <label>City<input id="field" value="Zurich"></label>
 <label><input id="toggle" type="checkbox">Refundable</label>
 <select aria-label="Category"><option>All</option><option>Design</option></select>
-<p id="outside">Unrelated offscreen text</p>"""
+<p id="outside">Unrelated offscreen text</p>
+<button id="offscreen" style="position:absolute;top:3400px"
+  onclick="window.offscreenClicks=(window.offscreenClicks||0)+1">Offscreen action</button>
+<main id="feed" style="position:absolute;top:150px;left:260px;width:240px;height:140px;overflow:auto">
+  <div style="height:700px"></div>
+  <button id="nested" onclick="window.nestedClicks=(window.nestedClicks||0)+1">Nested action</button>
+</main>"""
 
 
 def main():
@@ -29,6 +35,25 @@ def main():
         browser.evaluate("document.querySelector('#outside').textContent='Updated outside the viewport'")
         assert browser.fresh(page)
         passed.append("unrelated offscreen text does not invalidate")
+
+        page = browser.observe(screenshot=False)
+        offscreen = next(a for a in page["actions"] if a["label"] == "Offscreen action")
+        assert not offscreen["in_viewport"]
+        browser.act(offscreen, page)
+        assert browser.evaluate("window.offscreenClicks") == 1
+        assert browser.evaluate("scrollY") > 0
+        passed.append("offscreen observed target scrolls into view and clicks once")
+        browser.evaluate("scrollTo(0,0)")
+
+        page = browser.observe(screenshot=False)
+        nested = next(a for a in page["actions"] if a["label"] == "Nested action")
+        assert any(a["kind"] == "scroll" and a["label"] == "Scroll down · main content" for a in page["actions"])
+        assert not nested["in_viewport"]
+        browser.act(nested, page)
+        assert browser.evaluate("window.nestedClicks") == 1
+        assert browser.evaluate("document.querySelector('#feed').scrollTop") > 0
+        passed.append("offscreen target scrolls its nested ancestor before clicking")
+        browser.evaluate("scrollTo(0,0); document.querySelector('#feed').scrollTop=0")
 
         mutations = {
             "visible context": "document.querySelector('#context').textContent='Cart total: $100'",
@@ -112,6 +137,16 @@ def main():
         browser.act(select, page)
         assert browser.evaluate("document.querySelector('#category').value") == "Design"
         passed.append("native dropdown selects an observed option")
+
+        browser.evaluate("document.querySelector('#category').style.cssText='position:absolute;top:2500px'; "
+                         "document.querySelector('#category').value='All'")
+        page = browser.observe(screenshot=False)
+        select = next(a for a in page["actions"] if a["kind"] == "select")
+        assert not select["in_viewport"]
+        browser.act(select, page)
+        assert browser.evaluate("document.querySelector('#category').value") == "Design"
+        assert browser.evaluate("scrollY") > 0
+        passed.append("offscreen native dropdown scrolls into view and selects")
 
         browser.evaluate("document.querySelector('#query').addEventListener('input',()=>setTimeout(()=>{"
                          "document.querySelector('#suggestions').innerHTML='<div role=option>Generated</div>'"

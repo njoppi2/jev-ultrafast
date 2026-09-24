@@ -16,7 +16,10 @@ a matching link is not enough. BLOCKED means no supported operation can make pro
 TARGET = """Choose the best observed target if the next operation is the one specified in this question.
 Use the user's entire goal, field values, nearby text, and recent actions. This question chooses only
 a target for that operation; another question decides which operation to execute. Do not choose
-a field that already contains the requested value. Choose only an offered element index."""
+a field that already contains the requested value. Choose only an offered element index. Offscreen
+targets are observed DOM elements and the executor will scroll the chosen target into view before acting.
+Use the provided context to distinguish repeated labels. Scroll a listed region only when the desired
+target is absent from the offered elements, as with content that loads while scrolling."""
 
 TEXT_VALUE = """Return a JSON object with exactly one key, text: the exact string to enter in the selected field.
 Infer the value from the original goal and field meaning, using current page context and history.

@@ -86,7 +86,7 @@ class Browser:
         raise StalePage("Page did not settle")
 
     def fresh(self, page, action=None):
-        if action is not None and action["kind"] in {"click", "select"}:
+        if action is not None and action["kind"] in {"click", "fill", "select", "scroll"}:
             node = action["node"]
             if type(node) is not int:
                 return False
@@ -102,7 +102,10 @@ class Browser:
             raise StalePage("Page changed since this decision. Observe again.")
         if action["kind"] == "wait":
             time.sleep(0.1)
-        result = browser_operation({"operation": "act", "session": self.session, "action": action, "text": text})
+        result = browser_operation({
+            "operation": "act", "session": self.session, "action": action, "text": text,
+            "guard": page["guards"].get(str(action.get("node"))),
+        })
         self.after_input = action if action["kind"] != "wait" else None
         return result
 
@@ -124,8 +127,9 @@ def browser_operation(request):
     def call(method, **params):
         return cdp(method, session_id=session, **params)
 
-    def evaluate(expression):
-        result = call("Runtime.evaluate", expression=expression, returnByValue=True)
+    def evaluate(expression, await_promise=False):
+        result = call("Runtime.evaluate", expression=expression, returnByValue=True,
+                      awaitPromise=await_promise)
         if result.get("exceptionDetails"):
             if operation == "act" and request["action"]["kind"] == "select":
                 raise RuntimeError("Dropdown execution was interrupted; inspect before retrying.")
@@ -136,28 +140,64 @@ def browser_operation(request):
         action = request["action"]
         kind = action["kind"]
         if kind == "scroll":
-            call("Input.dispatchMouseEvent", type="mouseWheel", x=550, y=650, deltaX=0, deltaY=action["delta"])
+            point = evaluate("""(action => {
+              const e=window.__jevFast?.nodes.get(action.node);
+              if (!e?.isConnected || !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
+              const max=e.scrollHeight-e.clientHeight, down=action.delta>0;
+              if (max<=2 || (down && e.scrollTop>=max-2) || (!down && e.scrollTop<=2)) return null;
+              const r=e.getBoundingClientRect();
+              const left=Math.max(0,r.left), right=Math.min(innerWidth,r.right);
+              const top=Math.max(0,r.top), bottom=Math.min(innerHeight,r.bottom);
+              if (right<=left || bottom<=top) return null;
+              return {x:(left+right)/2,y:(top+bottom)/2};
+            })(""" + json.dumps(action) + ")")
+            if point is None:
+                raise StalePage("Scroll region changed or is no longer visible. Observe again.")
+            call("Input.dispatchMouseEvent", type="mouseWheel", x=point["x"], y=point["y"],
+                 deltaX=0, deltaY=action["delta"])
         elif kind != "wait":
             if type(action["node"]) is not int:
                 raise ValueError("Invalid observed node")
             # Code-owned node IDs refer to actual observed elements, never model-generated selectors.
-            target = evaluate("""(action => {
+            preflight = """((action, expectedGuard) => new Promise(resolve => {
               const e=window.__jevFast?.nodes.get(action.node);
-              if (!e?.isConnected || e.matches(':disabled') || e.closest('[aria-disabled="true"],[inert]') ||
-                  !e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return null;
-              if (action.kind==='fill' && (e.readOnly || e.getAttribute('aria-readonly')==='true')) return null;
-              const r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
-              if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight) return null;
-              if (!e.contains(document.elementFromPoint(x,y))) return null;
+              const c=window.__jevFast;
+              const valid=()=>e?.isConnected && JSON.stringify(c.guard(e))===JSON.stringify(expectedGuard) &&
+                !e.matches(':disabled') && !e.closest('[aria-disabled="true"],[inert]') &&
+                e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) &&
+                (action.kind!=='fill' || (!e.readOnly && e.getAttribute('aria-readonly')!=='true'));
+              const hit=()=>{const h=document.elementFromPoint(x,y); return h && e.contains(h)};
+              if (!valid()) return resolve(null);
+              let r=e.getBoundingClientRect(), x=r.x+r.width/2, y=r.y+r.height/2;
+              if (x<0 || y<0 || x>=innerWidth || y>=innerHeight || !hit()) {
+                e.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+                requestAnimationFrame(()=>requestAnimationFrame(()=>{
+                  if (!valid()) return resolve(null);
+                  r=e.getBoundingClientRect(); x=r.x+r.width/2; y=r.y+r.height/2;
+                  if (!r.width || !r.height || x<0 || y<0 || x>=innerWidth || y>=innerHeight ||
+                      !hit()) return resolve(null);
+                  if (action.kind==='select') {
+                    if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
+                        !o.disabled && !o.closest('optgroup[disabled]'))) return resolve(null);
+                    e.value=action.value;
+                    e.dispatchEvent(new Event('input',{bubbles:true}));
+                    e.dispatchEvent(new Event('change',{bubbles:true}));
+                  }
+                  resolve({x,y});
+                }));
+                return;
+              }
+              if (!r.width || !r.height || !hit()) return resolve(null);
               if (action.kind==='select') {
                 if (e.tagName!=='SELECT' || ![...e.options].some(o=>o.value===action.value &&
-                    !o.disabled && !o.closest('optgroup[disabled]'))) return null;
+                    !o.disabled && !o.closest('optgroup[disabled]'))) return resolve(null);
                 e.value=action.value;
                 e.dispatchEvent(new Event('input',{bubbles:true}));
                 e.dispatchEvent(new Event('change',{bubbles:true}));
               }
-              return {x,y};
-            })(""" + json.dumps(action) + ")")
+              resolve({x,y});
+            }))(""" + json.dumps(action) + "," + json.dumps(request.get("guard")) + ")"
+            target = evaluate(preflight, await_promise=True)
             if target is None:
                 if kind == "select":
                     raise RuntimeError("Dropdown execution was not confirmed; inspect before retrying.")

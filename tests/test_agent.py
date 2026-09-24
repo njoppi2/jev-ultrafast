@@ -74,11 +74,24 @@ def test_one_index_per_node_with_operation_specific_targets():
     assert "WAIT" in controls
 
 
+def test_offscreen_duplicate_controls_carry_context():
+    actions = [
+        {"id": "e1", "kind": "click", "label": "Connect", "role": "button", "node": 1,
+         "in_viewport": True, "context": "Ari Lane · Product designer"},
+        {"id": "e2", "kind": "click", "label": "Connect", "role": "button", "node": 2,
+         "in_viewport": False, "context": "Shayna Jones · Researcher"},
+    ]
+    elements, targets, _ = model.action_space(actions)
+    assert elements[0]["offscreen"] is False
+    assert elements[1]["offscreen"] is True
+    assert targets["CLICK"]["2"]["context"] == "Shayna Jones · Researcher"
+
+
 def test_all_heads_are_one_request_and_only_matching_head_executes(monkeypatch):
     calls = []
 
-    def post(_url, _key, body):
-        calls.append(body)
+    def post(url, _key, body):
+        calls.append((url, body))
         return {
             "model": "test",
             "answers": {
@@ -89,11 +102,13 @@ def test_all_heads_are_one_request_and_only_matching_head_executes(monkeypatch):
         }
 
     monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("TYPESAFE_BASE_URL", "https://openrouter.ai/api/")
     monkeypatch.setattr(model, "post_json", post)
     d = model.choose(page(), "Find a book", [])
     assert len(calls) == 1
     assert d["operation"] == "TYPE_TEXT" and d["target"] == "1" and d["choice"] == "e1"
-    assert set(calls[0]["questions"]) == {"operation", "click_target", "type_text_target"}
+    assert calls[0][0] == "https://openrouter.ai/api/v1/systemone"
+    assert set(calls[0][1]["questions"]) == {"operation", "click_target", "type_text_target"}
 
 
 def test_click_cannot_consume_a_text_target(monkeypatch):

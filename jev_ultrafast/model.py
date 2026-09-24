@@ -49,6 +49,10 @@ def action_space(actions):
     """One index per observed element; each operation has its own valid target choices."""
     elements, indices, targets, controls = [], {}, {}, {}
     operations = {"click": "CLICK", "fill": "TYPE_TEXT", "select": "SELECT"}
+    labels_by_node = {}
+    for action in actions:
+        if action.get("kind") in operations:
+            labels_by_node.setdefault((action.get("role"), action["label"].split(" → ")[0]), set()).add(action["node"])
     for action in actions:
         kind = action["kind"]
         if kind not in operations:
@@ -59,6 +63,11 @@ def action_space(actions):
             index = str(len(elements) + 1)
             indices[node] = index
             element = {k: action[k] for k in ("role", "value", "checked", "selected", "expanded") if k in action}
+            if "in_viewport" in action:
+                element["offscreen"] = not action["in_viewport"]
+            group_key = (action.get("role"), action["label"].split(" → ")[0])
+            if len(labels_by_node.get(group_key, ())) > 1 and action.get("context"):
+                element["context"] = action["context"]
             element.update(index=index, label=action["label"].split(" → ")[0], operations=[])
             if kind == "select":
                 element["value"] = action.get("current_value", "")
@@ -98,7 +107,8 @@ def choose(state, goal, history):
                 index: {
                     "element": f"[{index}] {a['label']}",
                     "current_value": a.get("current_value", a.get("value", "")),
-                    **{k: a[k] for k in ("role", "checked", "selected", "expanded") if k in a},
+                    **{k: a[k] for k in ("role", "checked", "selected", "expanded", "context") if k in a},
+                    **({"offscreen": not a["in_viewport"]} if "in_viewport" in a else {}),
                 }
                 for index, a in candidates.items()
             },
@@ -116,7 +126,8 @@ def choose(state, goal, history):
         "questions": questions,
     }
     started = time.perf_counter()
-    result = post_json("https://api.typesafe.ai/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
+    base_url = os.environ.get("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/")
+    result = post_json(base_url + "/v1/systemone", os.environ["TYPESAFE_API_KEY"], body)
     operation_answer = validate_choice(result["answers"].get("operation", {}), operations)
     operation = operation_answer["choice"]
     target = None
