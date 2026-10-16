@@ -12,6 +12,7 @@ from browser_harness.helpers import cdp
 # Atomically read visible content and controls, preserving actual DOM node identity.
 READ_STATE = Path(__file__).with_name("snapshot.js").read_text()
 MARKER = f"(() => {{ const state={READ_STATE}; return state?.marker ?? null; }})()"
+NAVIGATION_TIMEOUT = 15
 
 class StalePage(ValueError):
     """A decision no longer refers to the observed page."""
@@ -74,16 +75,21 @@ class Browser:
                 )
             except RuntimeError:
                 pass
-        for attempt in range(10):
+        # A click can start a navigation that takes seconds. Poll quickly, but wait for the next document.
+        deadline = time.monotonic() + NAVIGATION_TIMEOUT
+        while True:
             try:
                 return browser_operation(
                     {"operation": "observe", "session": self.session, "screenshot": screenshot}
                 )
             except StalePage:
-                if attempt == 9:
+                if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.02)
-        raise StalePage("Page did not settle")
+
+    def read_text(self, limit):
+        """Read-only: the whole document's rendered text, for callers that verify or extract results."""
+        return self.evaluate(f"(document.body?.innerText || '').slice(0, {int(limit)})")
 
     def fresh(self, page, action=None):
         if action is not None and action["kind"] in {"click", "fill", "select", "scroll"}:

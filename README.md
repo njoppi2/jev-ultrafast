@@ -91,6 +91,33 @@ uv run --env-file .env python examples/run.py \
 
 `uv run --env-file .env python examples/flights.py --keep-open` performs the flight search, checks the actual route/date/results, and saves its trace. It does not select or book a flight.
 
+## Use it from Claude Code or Codex
+
+`jev-mcp` is a small stdio [MCP](https://modelcontextprotocol.io) server. A coding agent hands Jev a goal; Jev drives an owned Chrome tab and returns the final URL, title, visible text, and executed actions.
+
+| Tool | What it does |
+| --- | --- |
+| `browse(goal, url?)` | Runs one goal. With `url`, starts in a fresh tab; without it, continues on the previous page. |
+| `read_page(full?)` | Reads the current tab and its indexed controls. No input, no model calls. |
+| `close_browser()` | Closes Jev's tab. Your other tabs are untouched. |
+
+Claude Code:
+
+```bash
+claude mcp add jev -- uv run --directory /path/to/jev-ultrafast jev-mcp
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.jev]
+command = "uv"
+args = ["run", "--directory", "/path/to/jev-ultrafast", "jev-mcp"]
+tool_timeout_sec = 300
+```
+
+The server reads `.env` from the repository, so keys stay out of the agent's config. A `browse` call stops after 240 s. `DONE` is Jev's own judgement: the result says so, and the calling agent should check it with the returned page or `read_page`.
+
 ## Why it moves
 
 - **One request per decision cycle.** Operation and target heads share the same observed state.
@@ -115,6 +142,7 @@ Every executed target is resolved from an observed node. The executor rechecks p
 | [model.py](jev_ultrafast/model.py) | Dynamic operation/target heads and text generation |
 | [questions.py](jev_ultrafast/questions.py) | Model instructions |
 | [demo.py](jev_ultrafast/demo.py) | Local inspector |
+| [mcp.py](jev_ultrafast/mcp.py) | MCP server for Claude Code, Codex, and other agents |
 
 ## Evidence and limits
 
